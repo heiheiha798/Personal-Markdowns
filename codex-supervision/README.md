@@ -1,6 +1,6 @@
 # dot 监督服务器 Codex 的工作流
 
-状态核验：2026-10-11 09:18（UTC+8）。源码依据：Codex `rust-v0.160.1`。
+状态核验：2026-10-11 10:04（UTC+8）。源码依据：Codex `rust-v0.160.1`。
 
 ## 1. 整体链路
 
@@ -52,16 +52,23 @@ ChatGPT 中的 dot：审查结果、判断方向、制定下一步
 
 ## 4. 当前验证边界
 
-- 已运行：定时监督、桌面经 SSH 读取现场、审查后向服务器 Codex 投递并核实指导
-- 已确认：官方状态逻辑，以及当前 TUI 与既有 daemon/socket 的对应关系
-- 正在验证：只读状态观察器，以及真实回合结束 → 桌面回传 → dot 接续审查的完整链路
-- 尚未完成：用真实事件验证后降低原定时检查频率
+- 已运行：三路独立 worktree / tmux session / Codex thread；dot 审查后，通过桌面 SSH 直接粘贴 prompt 并按 Enter，核实首条执行响应，避免把“中转接单”当成“服务器接收”
+- 已确认：官方状态逻辑、当前 TUI 与既有 daemon/socket 的对应关系，以及三线程状态读取
+- **已实测完成事件**：2026-10-11 10:03:13（UTC+8），只读观察器收到真实开发回合的 `active → idle`，约 38 秒即结束等待并回传最终输出，未等待 600 秒上限
+- 定时检查已从每 20 分钟降为每小时；活跃工作以事件回传接续审查
+- 尚未证明：长期无人值守、各种断线场景及所有错误/审批状态的完整可靠性
 
-目前保留原有每 20 分钟检查。事件链路验收后再调整已有检查的频率，不把设计方案写成已经部署成功。
+观察器是有界只读连接，不是无限常驻服务。回传后需要重新核实各线程并继续订阅；若建立连接时目标已空闲，直接读取结果，不等下一次状态变化。超时仅说明窗口内未见终态，断线必须记为 unknown，重新连接后读取现态；不能假设事件会重放。
 
-`notify` 的 `agent-turn-complete` 是另一种通知入口，但当前现场测试尚未证实完整链路成功。也不能把本方案描述成已支持任意 webhook 的通用接口。
+### 本次启动问题
 
-最终验收需要实际观察到目标回合的状态变化、可靠回传和去重，并确认没有打断开发。任务是否成功，则继续以代码、正确性、性能证据和事先冻结的验收条件判断。
+两个新 TUI 曾在 `account/read` 阶段报 workspace routing discovery timeout；改用独立 tmux session 本身没有解决。官方 0.160.1 源码显示，`-c model_reasoning_effort="xhigh"` 会排除隐式 daemon 复用。
+
+显式 `--remote unix://` 可连接当前用户已有的 control socket；本次使用已核实的既有 socket 后成功进入新会话。它仍执行正常路由/认证，不是跳过认证，也不保证修复所有超时。新线程可分别指定工作目录、模型、推理强度与权限；文件夹信任、Full Access 等必须由用户明确批准。
+
+已有 daemon 不继承新 TUI 客户端的环境变化。若需给新任务设置工具环境，应使用支持的线程级配置并核实实际值；例如仅在客户端设置 `CUDA_VISIBLE_DEVICES` 不能证明远端工具也使用该值。环境变量也不是权限隔离的替代品。
+
+`notify` 的 `agent-turn-complete` 现场链路仍未验证成功；当前已验证的是既有 daemon 的状态事件路径。不能把本方案描述成任意 webhook 接口，也不能将 `idle` 当作任务验收通过。
 
 ## 官方源码
 
@@ -71,3 +78,6 @@ ChatGPT 中的 dot：审查结果、判断方向、制定下一步
 - [回合运行与清理](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/tui/src/chatwidget/turn_runtime.rs)
 - [线程状态管理](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/app-server/src/thread_status.rs)
 - [消息发送与广播](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/app-server/src/outgoing_message.rs)
+
+- [隐式 daemon 复用条件](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/tui/src/daemon_startup.rs)
+- [远程会话参数与初始化](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/tui/src/app_server_session.rs)
